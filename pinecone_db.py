@@ -1,11 +1,15 @@
 import os
 import json
 import logging
+import requests
+import zipfile
+from io import BytesIO
+from shutil import move, rmtree
 from dotenv import load_dotenv
 from pinecone import Pinecone, ServerlessSpec
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
-from langchain.vectorstores import Pinecone as LangchainPinecone  # Renamed to avoid conflicts
+from langchain.vectorstores import Pinecone as LangchainPinecone
 
 load_dotenv()
 
@@ -18,6 +22,42 @@ class CustomDocument:
     def __init__(self, page_content, metadata):
         self.page_content = page_content
         self.metadata = metadata
+
+# Function to download and unzip the file
+def download_and_unzip(url, extract_to):
+    response = requests.get(url)
+    if response.status_code == 200:
+        with zipfile.ZipFile(BytesIO(response.content)) as z:
+            z.extractall(extract_to)
+            logger.info(f"Downloaded and extracted the zip file to {extract_to}")
+    else:
+        logger.error(f"Failed to download the zip file: Status code {response.status_code}")
+        raise Exception(f"Failed to download the zip file: Status code {response.status_code}")
+
+# Function to create directory if it doesn't exist
+def create_directory_if_not_exists(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        logger.info(f"Created directory: {directory}")
+
+# Function to move JSON files to the data directory
+def move_json_files(src_dir, dest_dir):
+    for root, _, files in os.walk(src_dir):
+        for file in files:
+            if file.endswith('.json'):
+                src_file = os.path.join(root, file)
+                dest_file = os.path.join(dest_dir, file)
+                move(src_file, dest_file)
+                logger.info(f"Moved {src_file} to {dest_file}")
+
+# Function to clean up the extracted files and folders
+def clean_up(directories, zip_file):
+    for directory in directories:
+        rmtree(directory, ignore_errors=True)
+        logger.info(f"Removed directory: {directory}")
+    if os.path.exists(zip_file):
+        os.remove(zip_file)
+        logger.info(f"Removed zip file: {zip_file}")
 
 # Function to load and parse JSON files from data directory
 def load_json_files(data_dir):
@@ -39,19 +79,6 @@ def load_json_files(data_dir):
                 
                 logger.info(f"Processing CVE: {cve_id}")
                 description = data['containers']['cna']['descriptions'][0]['value']
-                
-                # # Try to find the description
-                # description = None
-                # if 'containers' in data and 'cna' in data['containers']:
-                #     cna = data['containers']['cna']
-                #     if 'descriptions' in cna and cna['descriptions']:
-                #         description = cna['descriptions'][0].get('value')
-                #     elif 'description' in cna:
-                #         description = cna['description']
-                
-                # if description is None:
-                #     logger.warning(f"No description found for CVE: {cve_id}")
-                #     description = "No description available"
                 
                 doc = CustomDocument(page_content=description, metadata={"cve_id": cve_id})
                 documents.append(doc)
@@ -79,9 +106,21 @@ if index_name not in pc.list_indexes().names():
     pc.create_index(
         name=index_name, 
         dimension=384,  # 384 is the dimension for BAAI/bge-small-en-v1.5
-        metric='cosine',  # Use the appropriate metric for your use case
+        metric='cosine', 
         spec=spec
     )
+
+# Download and unzip the file
+zip_url = os.getenv("URL")
+logger.info(f"Downloading and extracting the zip file from {zip_url}")
+zip_file_name = os.path.basename(zip_url)
+download_and_unzip(zip_url, '.')
+
+# Create the data directory if it doesn't exist
+create_directory_if_not_exists('data')
+
+# Move JSON files to the data directory
+move_json_files('deltaCves', 'data')
 
 # Load and prepare documents
 data_dir = 'data'
@@ -105,7 +144,10 @@ try:
     )
 
     logger.info("Pinecone index updated successfully.")
+    
+    # Clean up the data, deltacves folder, and zip file
+    clean_up(['deltaCves', 'data'], zip_file_name)
+    
 except Exception as e:
     logger.error(f"An error occurred in the main script: {str(e)}")
     raise
-
