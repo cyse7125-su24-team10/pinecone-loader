@@ -1,6 +1,9 @@
+streamlit
 python-dotenv
-pinecone-client
 langchain
-langchain-community
-transformers
-sentence-transformers
+langchain_community
+faiss-cpu
+langchain-groq
+#sentence_transformers
+pinecone-client
+langchain-pinecone
